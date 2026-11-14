@@ -1,0 +1,90 @@
+# AnythingLLM + Authelia OIDC（每个 OIDC 用户对应独立的 AnythingLLM 账号）
+#
+# 请求路径：
+#   浏览器 --> 你现有的 HTTPS 反代 --> gateway:3001 (Caddy, 仅内部路由)
+#                                       ├─ /sso/oidc/*  --> oidc-bridge   (OIDC 登录、建号、同步角色)
+#                                       └─ 其余         --> anythingllm
+#
+# 数据：全部 bind mount 到宿主机 ./data，不使用 Docker 命名 volume。
+# 部署分两个阶段，详见 README.md。
+
+services:
+  anythingllm:
+    image: mintplexlabs/anythingllm:latest
+    container_name: anythingllm
+    restart: unless-stopped
+    cap_add:
+      - SYS_ADMIN            # 内置 Chromium（网页抓取）需要
+    expose:
+      - "3001"
+    environment:
+      SERVER_PORT: "3001"
+      STORAGE_DIR: /app/server/storage
+      JWT_SECRET: ${JWT_SECRET}
+      SIG_KEY: ${SIG_KEY}
+      SIG_SALT: ${SIG_SALT}
+      DISABLE_TELEMETRY: "true"
+      DISABLE_SWAGGER_DOCS: "true"
+
+      # ===== 第二阶段才取消下面三行的注释 =====
+      # 先完成初始化、开启多用户模式、创建 API Key，否则会把自己锁在外面。
+      # AnythingLLM 只判断变量"是否存在"，设成空字符串也算开启，所以只能靠注释来关闭。
+      # SIMPLE_SSO_ENABLED: "1"
+      # SIMPLE_SSO_NO_LOGIN: "1"
+      # SIMPLE_SSO_NO_LOGIN_REDIRECT: ${PUBLIC_URL}/sso/oidc/login
+    volumes:
+      - ./data/storage:/app/server/storage
+      # UI 中修改的设置会写回这个文件；必须先 touch 出来，否则 Docker 会建成目录
+      - ./data/anythingllm.env:/app/server/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  oidc-bridge:
+    image: node:22-alpine
+    container_name: anythingllm-oidc-bridge
+    restart: unless-stopped
+    user: node
+    working_dir: /app
+    command: ["node", "server.mjs"]
+    expose:
+      - "8080"
+    environment:
+      PORT: "8080"
+      PUBLIC_URL: ${PUBLIC_URL}
+      BRIDGE_SECRET: ${BRIDGE_SECRET}
+      # Authelia
+      OIDC_ISSUER_URL: ${OIDC_ISSUER_URL}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      OIDC_SCOPES: "openid profile email groups"
+      OIDC_USERNAME_CLAIM: preferred_username
+      OIDC_GROUPS_CLAIM: groups
+      # AnythingLLM
+      ANYTHINGLLM_INTERNAL_URL: http://anythingllm:3001
+      ANYTHINGLLM_API_KEY: ${ANYTHINGLLM_API_KEY}
+      # 权限映射
+      ALLOWED_GROUPS: ${ALLOWED_GROUPS:-}
+      ADMIN_GROUPS: ${ADMIN_GROUPS:-}
+      MANAGER_GROUPS: ${MANAGER_GROUPS:-}
+      SYNC_ROLE: ${SYNC_ROLE:-true}
+      DEFAULT_WORKSPACES: ${DEFAULT_WORKSPACES:-}
+      GROUP_WORKSPACES: ${GROUP_WORKSPACES:-}
+      # Authelia 用自签证书时，挂载 CA 并取消注释
+      # NODE_EXTRA_CA_CERTS: /app/ca.crt
+    volumes:
+      - ./bridge/server.mjs:/app/server.mjs:ro
+      # - ./ca.crt:/app/ca.crt:ro
+    depends_on:
+      - anythingllm
+
+  gateway:
+    image: caddy:2-alpine
+    container_name: anythingllm-gateway
+    restart: unless-stopped
+    ports:
+      - "3001:80"            # 你的 HTTPS 反代指向这里
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - anythingllm
+      - oidc-bridge

@@ -1,0 +1,30 @@
+# 仅做内部路由，TLS 由你现有的反代（Nginx / Traefik / NPM 等）负责
+{
+	auto_https off
+	admin off
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+:80 {
+	# OIDC 登录桥
+	handle /sso/oidc/* {
+		reverse_proxy oidc-bridge:8080 {
+			transport http {
+				keepalive off
+			}
+		}
+	}
+
+	# 其余全部交给 AnythingLLM（含 WebSocket 与流式响应）
+	handle {
+		reverse_proxy anythingllm:3001 {
+			# 不复用到后端的空闲连接：Node 默认 5 秒就关闭空闲连接，
+			# 复用到已关闭的连接会让 POST 请求立即 502
+			transport http {
+				keepalive off
+			}
+		}
+	}
+}

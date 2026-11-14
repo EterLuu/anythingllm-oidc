@@ -1,0 +1,31 @@
+# 合并到 Authelia 的 configuration.yml 中（identity_providers.oidc.clients 下追加一项）
+#
+# 生成 client secret：
+#   docker run --rm authelia/authelia:latest authelia crypto hash generate pbkdf2 \
+#     --variant sha512 --random --random.length 72 --random.charset rfc3986
+# 输出的 "Random Password" 填到 .env 的 OIDC_CLIENT_SECRET，"Digest" 填到下面的 client_secret。
+
+identity_providers:
+  oidc:
+    clients:
+      - client_id: 'anythingllm'
+        client_name: 'AnythingLLM'
+        client_secret: '$pbkdf2-sha512$310000$替换为生成的Digest'
+        public: false
+        authorization_policy: 'two_factor'      # 只要单因素可改为 one_factor
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        redirect_uris:
+          - 'https://llm.example.com/sso/oidc/callback'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'email'
+          - 'groups'
+        response_types:
+          - 'code'
+        grant_types:
+          - 'authorization_code'
+        token_endpoint_auth_method: 'client_secret_basic'
+        consent_mode: 'pre-configured'           # 用户同意一次后记住
+        pre_configured_consent_duration: '1y'
